@@ -106,7 +106,7 @@ def send_handshake(socket):
     for attempt in range(max_retries):
         try:
             # Send handshake message for Unity GameObject mapping
-            handshake_address = f'/button/handshake/'
+            handshake_address = f'/button/handshake'
             osc_msg = build_osc_message(handshake_address, int(DEVICE_ID))
             socket.sendto(osc_msg, (PC_IP, PORT))
             print(f"✓ Handshake sent successfully (attempt {attempt + 1})")
