@@ -2,6 +2,7 @@
 CircuitPython WiFi Button Controller
 ===================================
 Sends OSC messages over WiFi when a button is pressed/released.
+Also sends a handshake message on startup to announce device presence.
 
 Hardware Requirements:
 - ESP32-S2/S3 board with WiFi capability
@@ -9,12 +10,13 @@ Hardware Requirements:
 - Built-in LED for status indication
 
 Configuration:
-- Set WiFi credentials and target PC IP in settings.toml
+- Set WiFi credentials, device ID, and target PC IP in settings.toml
 - Ensure target PC is listening on the specified UDP port
 
 OSC Messages Sent:
-- /button/press <press_count>
-- /button/release <press_count>  
+- /button/handshake/<device_id> (on startup)
+- /button/press (on button press)
+- /button/release (on button release)
 """
 
 import time
@@ -29,6 +31,7 @@ WIFI_SSID = os.getenv("WIFI_SSID")
 WIFI_PASSWORD = os.getenv("WIFI_PASSWORD")
 PC_IP = os.getenv("PC_IP")
 PORT = int(os.getenv("PORT", 5000))
+DEVICE_ID = os.getenv("DEVICE_ID", "unknown_device")
 
 # Validate required environment variables
 if not WIFI_SSID:
@@ -97,6 +100,28 @@ def ping_test():
         print(f"✗ Connectivity test failed: {e}")
         return False
 
+def send_handshake(socket):
+    """Send handshake message to announce device startup"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Send handshake message for Unity GameObject mapping
+            handshake_address = f'/button/handshake/'
+            osc_msg = build_osc_message(handshake_address, int(DEVICE_ID))
+            socket.sendto(osc_msg, (PC_IP, PORT))
+            print(f"✓ Handshake sent successfully (attempt {attempt + 1})")
+            print(f"  OSC Address: {handshake_address}")
+            blink_led(3, 0.1)  # 3 quick blinks to indicate handshake sent
+            return True
+        except Exception as e:
+            print(f"✗ Handshake failed (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)  # Wait before retry
+    
+    print("✗ Failed to send handshake after all attempts")
+    blink_led(5, 0.2)  # 5 slow blinks to indicate handshake failure
+    return False
+
 # Button Setup
 btn = DigitalInOut(board.A0)
 btn.direction = Direction.INPUT
@@ -132,6 +157,10 @@ if not connect_wifi():
 
 pool = socketpool.SocketPool(wifi.radio)
 sock = pool.socket(pool.AF_INET, pool.SOCK_DGRAM)
+
+# Send handshake message to announce device startup
+print("Sending startup handshake...")
+send_handshake(sock)
 
 print("Ready! Press button...")
 prev_btn_state = True  # Assume button is not pressed at start (HIGH)
