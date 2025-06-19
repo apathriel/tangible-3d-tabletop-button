@@ -64,11 +64,16 @@ def setup_button():
 
 def setup_haptic():
     """Initialize haptic motor hardware"""
-    i2c = board.STEMMA_I2C()
-    drv = adafruit_drv2605.DRV2605(i2c)
-    drv.use_ERM()
-    drv.sequence[0] = adafruit_drv2605.Effect(1)
-    return drv
+    try:
+        i2c = board.STEMMA_I2C()
+        drv = adafruit_drv2605.DRV2605(i2c)
+        drv.use_ERM()
+        drv.sequence[0] = adafruit_drv2605.Effect(1)
+        print("✓ Haptic motor initialized successfully")
+        return drv
+    except Exception as e:
+        print(f"⚠ Haptic motor not available: {e}")
+        return None
 
 def connect_wifi(config):
     """Connect to WiFi with retry logic"""
@@ -148,8 +153,11 @@ def handle_incoming_osc(address, drv):
     print(f"Received OSC: {address}")
     
     if address == "/haptic/play":
-        print("Triggering haptic motor...")
-        drv.play()  
+        if drv is not None:
+            print("Triggering haptic motor...")
+            drv.play()
+        else:
+            print("⚠ Haptic motor not available - skipping haptic feedback")
     else:
         print(f"Unknown OSC address: {address}")
 
@@ -220,8 +228,11 @@ def handle_button_events(btn, prev_btn_state, send_sock, config, drv, haptic_eff
         print("Button pressed")
         try:
             osc_msg = build_osc_message('/button/press')
-            drv.sequence[0] = adafruit_drv2605.Effect(haptic_effect)
-            drv.play()  # Trigger haptic motor on press
+            if drv is not None:
+                drv.sequence[0] = adafruit_drv2605.Effect(haptic_effect)
+                drv.play()  # Trigger haptic motor on press
+            else:
+                print("⚠ Haptic motor not available - skipping haptic feedback")
             send_sock.sendto(osc_msg, (config['PC_IP'], config['PORT']))
             print("✓ OSC UDP packet sent for press!")
         except Exception as e:
