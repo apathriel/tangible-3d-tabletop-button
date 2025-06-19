@@ -25,6 +25,8 @@ import wifi
 import socketpool
 from digitalio import DigitalInOut, Direction, Pull
 import os
+import busio    
+import adafruit_drv2605
 
 # WiFi Configuration
 WIFI_SSID = os.getenv("WIFI_SSID")
@@ -44,16 +46,15 @@ if not PC_IP:
 print(f"Configuration loaded - Target: {PC_IP}:{PORT}")
 
 # Led Setup
-led = DigitalInOut(board.LED)
-led.direction = Direction.OUTPUT
+# led = DigitalInOut(board.LED)
+# led.direction = Direction.OUTPUT
 
-def blink_led(times, delay=0.1):
-    """Blink LED a specified number of times"""
+""" def blink_led(times, delay=0.1):
     for _ in range(times):
         led.value = True
         time.sleep(delay)
         led.value = False
-        time.sleep(delay)
+        time.sleep(delay) """
 
 def pad4(s):
     """Pad bytes to next multiple of 4 bytes (OSC requirement)"""
@@ -111,7 +112,7 @@ def send_handshake(socket):
             socket.sendto(osc_msg, (PC_IP, PORT))
             print(f"✓ Handshake sent successfully (attempt {attempt + 1})")
             print(f"  OSC Address: {handshake_address}")
-            blink_led(3, 0.1)  # 3 quick blinks to indicate handshake sent
+            # blink_led(3, 0.1)  # 3 quick blinks to indicate handshake sent
             return True
         except Exception as e:
             print(f"✗ Handshake failed (attempt {attempt + 1}): {e}")
@@ -119,13 +120,24 @@ def send_handshake(socket):
                 time.sleep(1)  # Wait before retry
     
     print("✗ Failed to send handshake after all attempts")
-    blink_led(5, 0.2)  # 5 slow blinks to indicate handshake failure
+    # blink_led(5, 0.2)  # 5 slow blinks to indicate handshake failure
     return False
 
 # Button Setup
 btn = DigitalInOut(board.A0)
 btn.direction = Direction.INPUT
 btn.pull = Pull.UP
+
+# Haptic Setup
+i2c = board.STEMMA_I2C()
+
+drv = adafruit_drv2605.DRV2605(i2c)
+
+drv.use_ERM()
+
+drv.sequence[0] = adafruit_drv2605.Effect(1)
+
+drv.play()  # Test haptic motor on startup
 
 def connect_wifi():
     """Connect to WiFi with retry logic"""
@@ -135,7 +147,7 @@ def connect_wifi():
             print(f"Connecting to WiFi... (attempt {attempt + 1})")
             wifi.radio.connect(WIFI_SSID, WIFI_PASSWORD)
             print(f"Connected! ESP32 IP: {wifi.radio.ipv4_address}")
-            led.value = True  # LED ON = WiFi connected
+            # led.value = True  # LED ON = WiFi connected
             return True
         except Exception as e:
             print(f"WiFi connection failed: {e}")
@@ -143,11 +155,11 @@ def connect_wifi():
                 time.sleep(2)
             else:
                 # Blink LED if connection failed
-                for _ in range(10):
+                """ for _ in range(10):
                     led.value = not led.value
                     time.sleep(0.2)
                 led.value = False
-                return False
+                return False """
     return False
 
 # Connect to WiFi
@@ -174,6 +186,7 @@ while True:
         try:
             osc_msg = build_osc_message('/button/press')
             debug_msg = "Button pressed"
+            drv.play()  # Trigger haptic motor on press
             sock.sendto(osc_msg, (PC_IP, PORT))
             print("✓ OSC UDP packet sent for press!")
         except Exception as e:
