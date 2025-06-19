@@ -119,14 +119,36 @@ def pad4(s):
 def build_osc_message(address, *args):
     """
     Build a minimal OSC message.
-    Only supports integer arguments for simplicity.
+    Supports integer and string arguments.
     """
     msg = pad4(address.encode('utf-8'))
-    # Build type tag string
-    type_tags = ',' + ''.join('i' for _ in args)
-    msg += pad4(type_tags.encode('utf-8'))
+    
+    # Build type tag string based on argument types
+    type_tags = ','
     for arg in args:
-        msg += int(arg).to_bytes(4, 'big', signed=True)
+        if isinstance(arg, str):
+            type_tags += 's'  # string type
+        elif isinstance(arg, int):
+            type_tags += 'i'  # integer type
+        else:
+            # Convert other types to integers for compatibility
+            type_tags += 'i'
+    
+    msg += pad4(type_tags.encode('utf-8'))
+    
+    # Add arguments based on their types
+    for arg in args:
+        if isinstance(arg, str):
+            # String arguments need to be null-terminated and padded
+            string_data = arg.encode('utf-8') + b'\x00'
+            msg += pad4(string_data)
+        elif isinstance(arg, int):
+            # Integer arguments are 4-byte big-endian
+            msg += arg.to_bytes(4, 'big', signed=True)
+        else:
+            # Convert other types to integers
+            msg += int(arg).to_bytes(4, 'big', signed=True)
+    
     return msg
 
 def parse_osc_message(data):
@@ -228,7 +250,7 @@ def handle_button_events(btn, prev_btn_state, send_sock, config, drv, haptic_eff
     if prev_btn_state and not curr_btn_state:
         print("Button pressed")
         try:
-            osc_msg = build_osc_message('/button/press')
+            osc_msg = build_osc_message('/button/press', 33)
             if drv is not None:
                 drv.sequence[0] = adafruit_drv2605.Effect(haptic_effect)
                 drv.play()  # Trigger haptic motor on press
@@ -243,7 +265,7 @@ def handle_button_events(btn, prev_btn_state, send_sock, config, drv, haptic_eff
     if not prev_btn_state and curr_btn_state:
         print("Button released")
         try:
-            osc_msg = build_osc_message('/button/release')
+            osc_msg = build_osc_message('/button/release', "test")
             send_sock.sendto(osc_msg, (config['PC_IP'], config['PORT']))
             print("✓ OSC UDP packet sent for release!")
         except Exception as e:
