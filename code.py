@@ -25,36 +25,86 @@ import wifi
 import socketpool
 from digitalio import DigitalInOut, Direction, Pull
 import os
-import busio    
 import adafruit_drv2605
 
-# WiFi Configuration
-WIFI_SSID = os.getenv("WIFI_SSID")
-WIFI_PASSWORD = os.getenv("WIFI_PASSWORD")
-PC_IP = os.getenv("PC_IP")
-PORT = int(os.getenv("PORT", 5000))
-DEVICE_ID = os.getenv("DEVICE_ID", "unknown_device")
+# ============================================================================
+# CONFIGURATION MANAGEMENT
+# ============================================================================
 
-# Validate required environment variables
-if not WIFI_SSID:
-    raise ValueError("WIFI_SSID environment variable is required")
-if not WIFI_PASSWORD:
-    raise ValueError("WIFI_PASSWORD environment variable is required")
-if not PC_IP:
-    raise ValueError("PC_IP environment variable is required")
+def load_configuration():
+    """Load and validate configuration from environment variables"""
+    config = {
+        'WIFI_SSID': os.getenv("WIFI_SSID"),
+        'WIFI_PASSWORD': os.getenv("WIFI_PASSWORD"),
+        'PC_IP': os.getenv("PC_IP"),
+        'PORT': int(os.getenv("PORT", 5000)),
+        'LISTEN_PORT': int(os.getenv("LISTEN_PORT", 5001)),
+        'DEVICE_ID': os.getenv("DEVICE_ID", "unknown_device")
+    }
+    
+    # Validate required environment variables
+    required_vars = ['WIFI_SSID', 'WIFI_PASSWORD', 'PC_IP']
+    for var in required_vars:
+        if not config[var]:
+            raise ValueError(f"{var} environment variable is required")
+    
+    print(f"Configuration loaded - Target: {config['PC_IP']}:{config['PORT']}")
+    return config
 
-print(f"Configuration loaded - Target: {PC_IP}:{PORT}")
+# ============================================================================
+# HARDWARE INITIALIZATION
+# ============================================================================
 
-# Led Setup
-# led = DigitalInOut(board.LED)
-# led.direction = Direction.OUTPUT
+def setup_button():
+    """Initialize button hardware"""
+    btn = DigitalInOut(board.A0)
+    btn.direction = Direction.INPUT
+    btn.pull = Pull.UP
+    return btn
 
-""" def blink_led(times, delay=0.1):
-    for _ in range(times):
-        led.value = True
-        time.sleep(delay)
-        led.value = False
-        time.sleep(delay) """
+def setup_haptic():
+    """Initialize haptic motor hardware"""
+    i2c = board.STEMMA_I2C()
+    drv = adafruit_drv2605.DRV2605(i2c)
+    drv.use_ERM()
+    drv.sequence[0] = adafruit_drv2605.Effect(1)
+    return drv
+
+def connect_wifi(config):
+    """Connect to WiFi with retry logic"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(f"Connecting to WiFi... (attempt {attempt + 1})")
+            wifi.radio.connect(config['WIFI_SSID'], config['WIFI_PASSWORD'])
+            print(f"Connected! ESP32 IP: {wifi.radio.ipv4_address}")
+            return True
+        except Exception as e:
+            print(f"WiFi connection failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+            else:
+                print("✗ Failed to connect to WiFi after all attempts")
+    return False
+
+def setup_sockets(config):
+    """Initialize UDP sockets for sending and receiving"""
+    pool = socketpool.SocketPool(wifi.radio)
+    
+    # Sending socket
+    send_sock = pool.socket(pool.AF_INET, pool.SOCK_DGRAM)
+    
+    # Receiving socket
+    recv_sock = pool.socket(pool.AF_INET, pool.SOCK_DGRAM)
+    recv_sock.settimeout(0.01)
+    
+    try:
+        recv_sock.bind(('0.0.0.0', config['LISTEN_PORT']))
+        print(f"✓ Listening for OSC messages on port {config['LISTEN_PORT']}")
+    except Exception as e:
+        print(f"✗ Failed to bind to port {config['LISTEN_PORT']}: {e}")
+    
+    return send_sock, recv_sock
 
 def pad4(s):
     """Pad bytes to next multiple of 4 bytes (OSC requirement)"""
@@ -73,19 +123,53 @@ def build_osc_message(address, *args):
         msg += int(arg).to_bytes(4, 'big', signed=True)
     return msg
 
-def test_connectivity():
+def parse_osc_message(data):
+    """
+    Parse a simple OSC message to extract the address.
+    Returns the OSC address string or None if parsing fails.
+    """
+    try:
+        # Find the first null terminator for the address
+        null_pos = data.find(b'\x00')
+        if null_pos == -1:
+            return None
+        
+        address = data[:null_pos].decode('utf-8')
+        return address
+    except:
+        return None
+
+# ============================================================================
+# HARDWARE SETUP FUNCTIONS
+# ============================================================================
+    
+def handle_incoming_osc(address, drv):
+    """Handle incoming OSC messages and perform actions"""
+    print(f"Received OSC: {address}")
+    
+    if address == "/haptic/play":
+        print("Triggering haptic motor...")
+        drv.play()  
+    else:
+        print(f"Unknown OSC address: {address}")
+
+# ============================================================================
+# NETWORK DIAGNOSTIC FUNCTIONS
+# ============================================================================
+
+def test_connectivity(config):
     """Test basic network connectivity"""
     print(f"ESP32 IP: {wifi.radio.ipv4_address}")
     print(f"Gateway: {wifi.radio.ipv4_gateway}")
     print(f"Subnet: {wifi.radio.ipv4_subnet}")
-    print(f"Target PC: {PC_IP}:{PORT}")
+    print(f"Target PC: {config['PC_IP']}:{config['PORT']}")
     # Simple subnet check by comparing first 3 octets
     esp_parts = str(wifi.radio.ipv4_address).split('.')
-    pc_parts = PC_IP.split('.')
+    pc_parts = config['PC_IP'].split('.')
     same_subnet = esp_parts[:3] == pc_parts[:3]
     print(f"Likely same subnet: {same_subnet}")
 
-def ping_test():
+def ping_test(config):
     """Simple connectivity test"""
     try:
         pool = socketpool.SocketPool(wifi.radio)
@@ -93,7 +177,7 @@ def ping_test():
         sock.settimeout(2.0)
         # Send test packet
         test_msg = b"PING_TEST"
-        sock.sendto(test_msg, (PC_IP, PORT))
+        sock.sendto(test_msg, (config['PC_IP'], config['PORT']))
         print("✓ Test packet sent successfully")
         sock.close()
         return True
@@ -101,15 +185,15 @@ def ping_test():
         print(f"✗ Connectivity test failed: {e}")
         return False
 
-def send_handshake(socket):
+def send_handshake(socket, config):
     """Send handshake message to announce device startup"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
             # Send handshake message for Unity GameObject mapping
             handshake_address = f'/button/handshake'
-            osc_msg = build_osc_message(handshake_address, int(DEVICE_ID))
-            socket.sendto(osc_msg, (PC_IP, PORT))
+            osc_msg = build_osc_message(handshake_address, int(config['DEVICE_ID']))
+            socket.sendto(osc_msg, (config['PC_IP'], config['PORT']))
             print(f"✓ Handshake sent successfully (attempt {attempt + 1})")
             print(f"  OSC Address: {handshake_address}")
             # blink_led(3, 0.1)  # 3 quick blinks to indicate handshake sent
@@ -123,61 +207,12 @@ def send_handshake(socket):
     # blink_led(5, 0.2)  # 5 slow blinks to indicate handshake failure
     return False
 
-# Button Setup
-btn = DigitalInOut(board.A0)
-btn.direction = Direction.INPUT
-btn.pull = Pull.UP
+# ============================================================================
+# EVENT HANDLING FUNCTIONS
+# ============================================================================
 
-# Haptic Setup
-i2c = board.STEMMA_I2C()
-
-drv = adafruit_drv2605.DRV2605(i2c)
-
-drv.use_ERM()
-
-drv.sequence[0] = adafruit_drv2605.Effect(1)
-
-drv.play()  # Test haptic motor on startup
-
-def connect_wifi():
-    """Connect to WiFi with retry logic"""
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            print(f"Connecting to WiFi... (attempt {attempt + 1})")
-            wifi.radio.connect(WIFI_SSID, WIFI_PASSWORD)
-            print(f"Connected! ESP32 IP: {wifi.radio.ipv4_address}")
-            # led.value = True  # LED ON = WiFi connected
-            return True
-        except Exception as e:
-            print(f"WiFi connection failed: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-            else:
-                # Blink LED if connection failed
-                """ for _ in range(10):
-                    led.value = not led.value
-                    time.sleep(0.2)
-                led.value = False
-                return False """
-    return False
-
-# Connect to WiFi
-if not connect_wifi():
-    print("Failed to connect to WiFi. Check credentials and try again.")
-    # Could add a reset or retry loop here
-
-pool = socketpool.SocketPool(wifi.radio)
-sock = pool.socket(pool.AF_INET, pool.SOCK_DGRAM)
-
-# Send handshake message to announce device startup
-print("Sending startup handshake...")
-send_handshake(sock)
-
-print("Ready! Press button...")
-prev_btn_state = True  # Assume button is not pressed at start (HIGH)
-
-while True:
+def handle_button_events(btn, prev_btn_state, send_sock, config, drv):
+    """Handle button press and release events"""
     curr_btn_state = btn.value  # True if not pressed, False if pressed
 
     # Detect button press (transition from not pressed to pressed)
@@ -185,9 +220,8 @@ while True:
         print("Button pressed")
         try:
             osc_msg = build_osc_message('/button/press')
-            debug_msg = "Button pressed"
             drv.play()  # Trigger haptic motor on press
-            sock.sendto(osc_msg, (PC_IP, PORT))
+            send_sock.sendto(osc_msg, (config['PC_IP'], config['PORT']))
             print("✓ OSC UDP packet sent for press!")
         except Exception as e:
             print(f"✗ Error sending OSC UDP packet on button press: {e}")
@@ -197,13 +231,68 @@ while True:
         print("Button released")
         try:
             osc_msg = build_osc_message('/button/release')
-            debug_msg = "Button released"
-            sock.sendto(osc_msg, (PC_IP, PORT))
+            send_sock.sendto(osc_msg, (config['PC_IP'], config['PORT']))
             print("✓ OSC UDP packet sent for release!")
         except Exception as e:
             print(f"✗ Error: {e}")
         time.sleep(0.2)  # Debounce after release
 
-    prev_btn_state = curr_btn_state
-    time.sleep(0.05)
- # type: ignore
+    return curr_btn_state
+
+def handle_incoming_messages(recv_sock, recv_buffer, drv):
+    """Handle incoming OSC messages"""
+    try:
+        bytes_received, addr = recv_sock.recvfrom_into(recv_buffer)
+        if bytes_received > 0:
+            data = recv_buffer[:bytes_received]
+            osc_address = parse_osc_message(data)
+            if osc_address:
+                handle_incoming_osc(osc_address, drv)
+    except OSError:
+        # No data received (timeout), continue
+        pass
+    except Exception as e:
+        print(f"Error receiving OSC: {e}")
+
+# ============================================================================
+# MAIN APPLICATION
+# ============================================================================
+
+def main():
+    """Main application entry point"""
+    # Load configuration
+    config = load_configuration()
+    
+    # Initialize hardware
+    btn = setup_button()
+    drv = setup_haptic()
+    
+    # Connect to WiFi
+    if not connect_wifi(config):
+        print("Failed to connect to WiFi. Check credentials and try again.")
+        return
+    
+    # Setup network sockets
+    send_sock, recv_sock = setup_sockets(config)
+    recv_buffer = bytearray(1024)
+    
+    # Send handshake message to announce device startup
+    print("Sending startup handshake...")
+    send_handshake(send_sock, config)
+    
+    print("Ready! Press button...")
+    prev_btn_state = True  # Assume button is not pressed at start (HIGH)
+    
+    # Main loop
+    while True:
+        # Handle incoming OSC messages
+        handle_incoming_messages(recv_sock, recv_buffer, drv)
+        
+        # Handle button events
+        prev_btn_state = handle_button_events(btn, prev_btn_state, send_sock, config, drv)
+        
+        time.sleep(0.05)
+
+# Start the application
+if __name__ == "__main__":
+    main()
