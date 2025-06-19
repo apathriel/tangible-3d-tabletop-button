@@ -211,7 +211,7 @@ def send_handshake(socket, config):
 # EVENT HANDLING FUNCTIONS
 # ============================================================================
 
-def handle_button_events(btn, prev_btn_state, send_sock, config, drv):
+def handle_button_events(btn, prev_btn_state, send_sock, config, drv, haptic_effect=1):
     """Handle button press and release events"""
     curr_btn_state = btn.value  # True if not pressed, False if pressed
 
@@ -220,6 +220,7 @@ def handle_button_events(btn, prev_btn_state, send_sock, config, drv):
         print("Button pressed")
         try:
             osc_msg = build_osc_message('/button/press')
+            drv.sequence[0] = adafruit_drv2605.Effect(haptic_effect)
             drv.play()  # Trigger haptic motor on press
             send_sock.sendto(osc_msg, (config['PC_IP'], config['PORT']))
             print("✓ OSC UDP packet sent for press!")
