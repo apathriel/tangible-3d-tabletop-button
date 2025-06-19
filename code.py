@@ -82,15 +82,16 @@ def connect_wifi(config):
         try:
             print(f"Connecting to WiFi... (attempt {attempt + 1})")
             wifi.radio.connect(config['WIFI_SSID'], config['WIFI_PASSWORD'])
-            print(f"Connected! ESP32 IP: {wifi.radio.ipv4_address}")
-            return True
+            esp32_ip = wifi.radio.ipv4_address
+            print(f"Connected! ESP32 IP: {esp32_ip}")
+            return esp32_ip
         except Exception as e:
             print(f"WiFi connection failed: {e}")
             if attempt < max_retries - 1:
                 time.sleep(2)
             else:
                 print("✗ Failed to connect to WiFi after all attempts")
-    return False
+    return None
 
 def setup_sockets(config):
     """Initialize UDP sockets for sending and receiving"""
@@ -280,7 +281,8 @@ def main():
     drv = setup_haptic()
     
     # Connect to WiFi
-    if not connect_wifi(config):
+    esp32_ip = connect_wifi(config)
+    if esp32_ip is None:
         print("Failed to connect to WiFi. Check credentials and try again.")
         return
     
